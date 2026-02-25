@@ -224,7 +224,17 @@ router.get("/building-footprints", (req, res) => {
     // At z15+ viewport is small, 2000 is plenty
     const MAX_FEATURES = 10000;
     if (features.length > MAX_FEATURES) {
-      features = features.slice(0, MAX_FEATURES);
+      features.sort((a, b) => {
+        const [ax, ay] = a.geometry.coordinates[0][0];
+        const [bx, by] = b.geometry.coordinates[0][0];
+        // interleave x/y to avoid column-ordering bias
+        return ax + ay - (bx + by);
+      });
+      // Stride-sample across the sorted list for even spread
+      const step = Math.floor(features.length / MAX_FEATURES);
+      features = features
+        .filter((_, i) => i % step === 0)
+        .slice(0, MAX_FEATURES);
     }
 
     res.json({
