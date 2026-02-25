@@ -65,6 +65,28 @@ router.get("/storm-surge-noah", (req, res) => {
   }
 });
 
+router.get("/tsunami-phivolcs", (req, res) => {
+  try {
+    const { province, municity, barangay } = req.query;
+
+    let features = drrmCache.get("phivolcs-tsunami") || [];
+
+    if (province) {
+      features = features.filter(
+        (f) => f.properties?.province?.toLowerCase() === province.toLowerCase(),
+      );
+    }
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (error) {
+    console.error("Error fetching phivolcs-tsunami data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.get("/critical-infra", (req, res) => {
   try {
     const { zoom, minLng, minLat, maxLng, maxLat } = req.query;
@@ -216,7 +238,12 @@ router.get("/building-footprints", (req, res) => {
   }
 });
 
-const layer = ["flood-noah", "noah-storm-surge", "phivolcs-liquefaction"];
+const layer = [
+  "flood-noah",
+  "noah-storm-surge",
+  "phivolcs-liquefaction",
+  "phivolcs-tsunami",
+];
 
 router.get("/flood-exposure/critical-infra/summary", (req, res) => {
   try {
