@@ -216,4 +216,111 @@ router.get("/building-footprints", (req, res) => {
   }
 });
 
+const layer = ["flood-noah", "noah-storm-surge", "phivolcs-liquefaction"];
+
+router.get("/flood-exposure/critical-infra/summary", (req, res) => {
+  try {
+    const { layer: requestedLayer } = req.query;
+
+    if (!requestedLayer || !layer.includes(requestedLayer)) {
+      return res.status(400).json({ error: "Invalid layer requested" });
+    }
+
+    const floodFeatures = drrmCache.get(requestedLayer) || [];
+    const criticalInfraFeatures = drrmCache.get("critical-infra") || [];
+
+    const summary = {};
+    const municipalitySummary = {};
+    const exposedFacilityIds = new Set();
+
+    const getMunicipality = (properties) => properties?.municity ?? "Unknown";
+
+    const normalizeSusceptibility = (raw) => {
+      if (!raw) return "Unknown";
+
+      return raw.toString().trim().replace(/\s+/g, " ");
+    };
+
+    const susceptibilityLevelsSet = new Set();
+
+    for (const flood of floodFeatures) {
+      const level = normalizeSusceptibility(flood.properties?.susceptibility);
+      susceptibilityLevelsSet.add(level);
+    }
+
+    const susceptibilityLevels = Array.from(susceptibilityLevelsSet).sort();
+
+    const createCounter = () =>
+      Object.fromEntries(susceptibilityLevels.map((level) => [level, 0]));
+
+    for (const facility of criticalInfraFeatures) {
+      const type = facility.properties?.type ?? "Unknown";
+      const municipality = getMunicipality(facility.properties);
+
+      if (!summary[type]) {
+        summary[type] = createCounter();
+      }
+
+      if (!municipalitySummary[municipality]) {
+        municipalitySummary[municipality] = {};
+      }
+
+      if (!municipalitySummary[municipality][type]) {
+        municipalitySummary[municipality][type] = createCounter();
+      }
+    }
+
+    for (const flood of floodFeatures) {
+      if (!flood.geometry) continue;
+
+      const susceptibility = normalizeSusceptibility(
+        flood.properties?.susceptibility,
+      );
+
+      for (const facility of criticalInfraFeatures) {
+        if (!facility.geometry) continue;
+
+        let intersects = false;
+
+        try {
+          intersects =
+            facility.geometry.type === "Point"
+              ? turf.booleanPointInPolygon(facility, flood)
+              : turf.booleanIntersects(facility, flood);
+        } catch (err) {
+          console.warn("Intersection check failed:", err.message);
+          continue;
+        }
+
+        if (!intersects) continue;
+
+        const id = facility.properties?.id ?? facility.properties?.name;
+
+        const type = facility.properties?.type ?? "Unknown";
+        const municipality = getMunicipality(facility.properties);
+
+        exposedFacilityIds.add(id);
+
+        summary[type][susceptibility] =
+          (summary[type][susceptibility] ?? 0) + 1;
+
+        municipalitySummary[municipality][type][susceptibility] =
+          (municipalitySummary[municipality][type][susceptibility] ?? 0) + 1;
+      }
+    }
+
+    res.json({
+      type: "flood-exposure-critical-summary",
+      totalFacilities: criticalInfraFeatures.length,
+      exposedFacilities: exposedFacilityIds.size,
+      susceptibilityLevels,
+      summary,
+      municipalitySummary,
+    });
+  } catch (error) {
+    console.error("Error building flood exposure summary:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;
