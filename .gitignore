@@ -28,4 +28,6 @@ Thumbs.db
 # Misc
 *.log
 
-data/drrm/essentials/building-footprints.geojson
+data/drrm/essentials/
+data/drrm/water-based/
+data/drrm/land-based/
