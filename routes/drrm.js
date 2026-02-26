@@ -42,6 +42,27 @@ router.get("/flood-noah", (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+router.get("/flood-mgb", (req, res) => {
+  try {
+    const { province, municity, barangay } = req.query;
+
+    let features = drrmCache.get("flood-mgb") || [];
+
+    if (province) {
+      features = features.filter(
+        (f) => f.properties?.province?.toLowerCase() === province.toLowerCase(),
+      );
+    }
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (error) {
+    console.error("Error fetching flood-mgb data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 router.get("/storm-surge-noah", (req, res) => {
   try {
@@ -253,6 +274,7 @@ const layer = [
   "noah-storm-surge",
   "phivolcs-liquefaction",
   "phivolcs-tsunami",
+  "flood-mgb",
 ];
 
 router.get("/flood-exposure/critical-infra/summary", (req, res) => {
@@ -263,7 +285,7 @@ router.get("/flood-exposure/critical-infra/summary", (req, res) => {
       return res.status(400).json({ error: "Invalid layer requested" });
     }
 
-    const floodFeatures = drrmCache.get(requestedLayer) || [];
+    const layerFeatures = drrmCache.get(requestedLayer) || [];
     const criticalInfraFeatures = drrmCache.get("critical-infra") || [];
 
     const summary = {};
@@ -280,8 +302,10 @@ router.get("/flood-exposure/critical-infra/summary", (req, res) => {
 
     const susceptibilityLevelsSet = new Set();
 
-    for (const flood of floodFeatures) {
-      const level = normalizeSusceptibility(flood.properties?.susceptibility);
+    for (const flood of layerFeatures) {
+      const level = normalizeSusceptibility(
+        flood.properties?.susceptibility ?? flood.properties?.FloodSusc,
+      );
       susceptibilityLevelsSet.add(level);
     }
 
@@ -307,11 +331,11 @@ router.get("/flood-exposure/critical-infra/summary", (req, res) => {
       }
     }
 
-    for (const flood of floodFeatures) {
-      if (!flood.geometry) continue;
+    for (const layer of layerFeatures) {
+      if (!layer.geometry) continue;
 
       const susceptibility = normalizeSusceptibility(
-        flood.properties?.susceptibility,
+        layer.properties?.susceptibility ?? layer.properties?.FloodSusc,
       );
 
       for (const facility of criticalInfraFeatures) {
@@ -322,8 +346,8 @@ router.get("/flood-exposure/critical-infra/summary", (req, res) => {
         try {
           intersects =
             facility.geometry.type === "Point"
-              ? turf.booleanPointInPolygon(facility, flood)
-              : turf.booleanIntersects(facility, flood);
+              ? turf.booleanPointInPolygon(facility, layer)
+              : turf.booleanIntersects(facility, layer);
         } catch (err) {
           console.warn("Intersection check failed:", err.message);
           continue;
