@@ -277,7 +277,7 @@ const layer = [
   "flood-mgb",
 ];
 
-router.get("/flood-exposure/critical-infra/summary", (req, res) => {
+router.get("/exposure/critical-infra/summary", (req, res) => {
   try {
     const { layer: requestedLayer } = req.query;
 
