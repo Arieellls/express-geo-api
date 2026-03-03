@@ -384,4 +384,138 @@ router.get("/exposure/critical-infra/summary", (req, res) => {
   }
 });
 
+router.get("/exposure/building-footprints/summary", (req, res) => {
+  try {
+    const { province, municity, barangay } = req.query;
+
+    let floodFeatures = drrmCache.get("flood-noah") || [];
+    let buildingFeatures = drrmCache.get("building-footprints") || [];
+
+    const totalBuildings = buildingFeatures.length;
+
+    if (province) {
+      floodFeatures = floodFeatures.filter(
+        (f) => f.properties?.province?.toLowerCase() === province.toLowerCase(),
+      );
+    }
+    if (municity) {
+      floodFeatures = floodFeatures.filter(
+        (f) => f.properties?.municity?.toLowerCase() === municity.toLowerCase(),
+      );
+    }
+    if (barangay) {
+      floodFeatures = floodFeatures.filter(
+        (f) => f.properties?.barangay?.toLowerCase() === barangay.toLowerCase(),
+      );
+    }
+
+    if (floodFeatures.length === 0 || buildingFeatures.length === 0) {
+      return res.json({
+        type: "building-footprint-exposure-summary",
+        totalBuildings,
+        sampledBuildings: 0,
+        exposedBuildings: 0,
+        susceptibilityLevels: [],
+        summary: {},
+        municipalitySummary: {},
+      });
+    }
+
+    const allLevels = [
+      ...new Set(
+        floodFeatures
+          .map(
+            (f) =>
+              f.properties?.susceptibility ??
+              f.properties?.hazard ??
+              f.properties?.FloodSusc ??
+              null,
+          )
+          .filter(Boolean),
+      ),
+    ].sort();
+
+    const floodIndex = new RBush();
+    const floodItems = floodFeatures
+      .filter((f) => f.geometry)
+      .map((f) => {
+        const [minX, minY, maxX, maxY] = turf.bbox(f);
+        return { minX, minY, maxX, maxY, feature: f };
+      });
+    floodIndex.load(floodItems);
+
+    let sampledBuildings = 0;
+    const exposedBuildings = [];
+
+    for (const building of buildingFeatures) {
+      if (!building.geometry) continue;
+      // if (sampledBuildings >= SAMPLE_LIMIT) break;
+
+      sampledBuildings++;
+
+      const centroid = turf.centroid(building);
+      const [minX, minY, maxX, maxY] = turf.bbox(centroid);
+
+      const candidates = floodIndex.search({
+        minX: minX - 0.0001,
+        minY: minY - 0.0001,
+        maxX: maxX + 0.0001,
+        maxY: maxY + 0.0001,
+      });
+
+      if (candidates.length === 0) continue;
+
+      const intersected = candidates.find((c) =>
+        turf.booleanPointInPolygon(centroid, c.feature),
+      );
+
+      if (intersected) {
+        const level =
+          intersected.feature.properties?.susceptibility ??
+          intersected.feature.properties?.FloodSusc ??
+          intersected.feature.properties?.hazard ??
+          "Unknown";
+
+        const municipality =
+          building.properties?.municity ??
+          intersected.feature.properties?.municity ??
+          "Unknown";
+
+        exposedBuildings.push({ level, municipality });
+      }
+    }
+
+    const summary = Object.fromEntries(allLevels.map((l) => [l, 0]));
+    const municipalitySummary = {};
+
+    for (const { level, municipality } of exposedBuildings) {
+      summary[level] = (summary[level] ?? 0) + 1;
+
+      if (!municipalitySummary[municipality]) {
+        municipalitySummary[municipality] = Object.fromEntries(
+          allLevels.map((l) => [l, 0]),
+        );
+      }
+      municipalitySummary[municipality][level] =
+        (municipalitySummary[municipality][level] ?? 0) + 1;
+    }
+
+    res.json({
+      type: "building-footprint-exposure-summary",
+      totalBuildings,
+      sampledBuildings,
+      exposedBuildings: exposedBuildings.length,
+      susceptibilityLevels: allLevels,
+      summary,
+      municipalitySummary,
+    });
+  } catch (error) {
+    console.error(
+      "Error computing building footprint exposure summary:",
+      error,
+    );
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 export default router;
