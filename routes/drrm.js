@@ -42,6 +42,7 @@ router.get("/flood-noah", (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 router.get("/flood-mgb", (req, res) => {
   try {
     const { province, municity, barangay } = req.query;
@@ -215,6 +216,7 @@ router.get("/phivolcs-liquefaction", (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
 const landslideIndex = new RBush();
 let landslideIndexed = false;
 
@@ -245,14 +247,13 @@ router.get("/earthquake-induced-landslide", (req, res) => {
 
     const zoomLevel = Number(zoom);
 
-    // Zoom gate — return empty below threshold
-    if (zoomLevel < 10) {
-      return res.json({
-        type: "FeatureCollection",
-        features: [],
-        meta: { zoom: zoomLevel, reason: "zoom too low" },
-      });
-    }
+    // if (zoomLevel < 10) {
+    //   return res.json({
+    //     type: "FeatureCollection",
+    //     features: [],
+    //     meta: { zoom: zoomLevel, reason: "zoom too low" },
+    //   });
+    // }
 
     const bbox = {
       minX: Number(minLng),
@@ -268,8 +269,7 @@ router.get("/earthquake-induced-landslide", (req, res) => {
     console.log("bbox:", bbox);
     console.log("features after bbox filter:", features.length);
 
-    // Cap features to avoid oversized payloads
-    const MAX_FEATURES = 1;
+    const MAX_FEATURES = 1000;
     if (features.length > MAX_FEATURES) {
       features.sort((a, b) => {
         const aCoord =
@@ -293,6 +293,77 @@ router.get("/earthquake-induced-landslide", (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching earthquake-induced-landslide data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+const landslideNOAHIndex = new RBush();
+let landslideNOAHIndexed = false;
+
+function indexLandslideNOAHFeatures(features) {
+  const items = features
+    .filter((f) => f.geometry)
+    .map((f) => {
+      const [minX, minY, maxX, maxY] = turf.bbox(f);
+      return { minX, minY, maxX, maxY, feature: f };
+    });
+  landslideNOAHIndex.load(items);
+}
+
+router.get("/landslide-noah", (req, res) => {
+  if (!landslideNOAHIndexed) {
+    const features = drrmCache.get("landslide-noah") || [];
+    indexLandslideNOAHFeatures(features);
+    landslideNOAHIndexed = true;
+  }
+
+  try {
+    const { zoom, minLng, minLat, maxLng, maxLat } = req.query;
+
+    if (!minLng || !minLat || !maxLng || !maxLat) {
+      return res.status(400).json({ error: "Missing bbox parameters" });
+    }
+
+    const zoomLevel = Number(zoom);
+
+    const bbox = {
+      minX: Number(minLng),
+      minY: Number(minLat),
+      maxX: Number(maxLng),
+      maxY: Number(maxLat),
+    };
+
+    const results = landslideNOAHIndex.search(bbox);
+    let features = results.map((item) => item.feature);
+
+    console.log("zoom:", zoomLevel);
+    console.log("bbox:", bbox);
+    console.log("features after bbox filter:", features.length);
+
+    const MAX_FEATURES = 100;
+    if (features.length > MAX_FEATURES) {
+      features.sort((a, b) => {
+        const aCoord =
+          a.geometry.coordinates[0][0] ?? a.geometry.coordinates[0];
+        const bCoord =
+          b.geometry.coordinates[0][0] ?? b.geometry.coordinates[0];
+        const [ax, ay] = Array.isArray(aCoord[0]) ? aCoord[0] : aCoord;
+        const [bx, by] = Array.isArray(bCoord[0]) ? bCoord[0] : bCoord;
+        return ax + ay - (bx + by);
+      });
+      const step = Math.floor(features.length / MAX_FEATURES);
+      features = features
+        .filter((_, i) => i % step === 0)
+        .slice(0, MAX_FEATURES);
+    }
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+      meta: { bbox, zoom: zoomLevel, total: results.length },
+    });
+  } catch (error) {
+    console.error("Error fetching landslide-noah data:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
