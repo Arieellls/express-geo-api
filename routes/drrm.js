@@ -149,6 +149,32 @@ router.get("/critical-infra", (req, res) => {
   }
 });
 
+function countCriticalInfraByType(features) {
+  return features.reduce((acc, feature) => {
+    const type = feature?.properties?.type;
+    if (!type) return acc;
+
+    acc[type] = (acc[type] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+router.get("/critical-infra/count", (req, res) => {
+  try {
+    const features = drrmCache.get("critical-infra") || [];
+
+    const byType = countCriticalInfraByType(features);
+
+    res.json({
+      total: features.length,
+      byType,
+    });
+  } catch (error) {
+    console.error("Error fetching global critical-infra counts:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.get("/phivolcs-liquefaction", (req, res) => {
   try {
     // const { zoom, minLng, minLat, maxLng, maxLat } = req.query;
