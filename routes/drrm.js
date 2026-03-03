@@ -109,6 +109,28 @@ router.get("/tsunami-phivolcs", (req, res) => {
   }
 });
 
+router.get("/groundshaking-phivolcs", (req, res) => {
+  try {
+    const { province, municity, barangay } = req.query;
+
+    let features = drrmCache.get("phivolcs-groundshaking") || [];
+
+    if (province) {
+      features = features.filter(
+        (f) => f.properties?.province?.toLowerCase() === province.toLowerCase(),
+      );
+    }
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (error) {
+    console.error("Error fetching phivolcs-groundshaking data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.get("/critical-infra", (req, res) => {
   try {
     const { zoom, minLng, minLat, maxLng, maxLat } = req.query;
