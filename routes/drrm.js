@@ -131,6 +131,50 @@ router.get("/groundshaking-phivolcs", (req, res) => {
   }
 });
 
+router.get("/rain-induced-landslide-mgb", (req, res) => {
+  try {
+    const { province, municity, barangay } = req.query;
+
+    let features = drrmCache.get("rain-induced-landslide-mgb") || [];
+
+    if (province) {
+      features = features.filter(
+        (f) => f.properties?.province?.toLowerCase() === province.toLowerCase(),
+      );
+    }
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (error) {
+    console.error("Error fetching rain-induced-landslide-mgb data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.get("/multihazard", (req, res) => {
+  try {
+    const { province, municity, barangay } = req.query;
+
+    let features = drrmCache.get("multihazard") || [];
+
+    if (province) {
+      features = features.filter(
+        (f) => f.properties?.province?.toLowerCase() === province.toLowerCase(),
+      );
+    }
+
+    res.json({
+      type: "FeatureCollection",
+      features,
+    });
+  } catch (error) {
+    console.error("Error fetching multihazard data:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 router.get("/critical-infra", (req, res) => {
   try {
     const { zoom, minLng, minLat, maxLng, maxLat } = req.query;
@@ -200,38 +244,11 @@ router.get("/critical-infra/count", (req, res) => {
 
 router.get("/phivolcs-liquefaction", (req, res) => {
   try {
-    // const { zoom, minLng, minLat, maxLng, maxLat } = req.query;
-
-    // if (!minLng || !minLat || !maxLng || !maxLat) {
-    //   return res.status(400).json({ error: "Missing bbox parameters" });
-    // }
-
-    // const bbox = [
-    //   Number(minLng),
-    //   Number(minLat),
-    //   Number(maxLng),
-    //   Number(maxLat),
-    // ];
-
     let features = drrmCache.get("phivolcs-liquefaction") || [];
-
-    // console.log("zoom:", zoom);
-    // console.log("bbox:", bbox);
-    // console.log("total features in cache:", features.length);
-
-    // const bboxPolygon = turf.bboxPolygon(bbox);
-
-    // features = features.filter((feature) => {
-    //   if (!feature.geometry) return false;
-    //   return turf.booleanIntersects(feature, bboxPolygon);
-    // });
-
-    // console.log("features after bbox filter:", features.length);
 
     res.json({
       type: "FeatureCollection",
       features,
-      // meta: { bbox, zoom },
     });
   } catch (error) {
     console.error("Error fetching phivolcs-liquefaction data:", error);
@@ -268,14 +285,6 @@ router.get("/earthquake-induced-landslide", (req, res) => {
     }
 
     const zoomLevel = Number(zoom);
-
-    // if (zoomLevel < 10) {
-    //   return res.json({
-    //     type: "FeatureCollection",
-    //     features: [],
-    //     meta: { zoom: zoomLevel, reason: "zoom too low" },
-    //   });
-    // }
 
     const bbox = {
       minX: Number(minLng),
@@ -427,16 +436,15 @@ router.get("/building-footprints", (req, res) => {
     const results = buildingIndex.search(bbox);
     let features = results.map((item) => item.feature);
 
-    // At z15+ viewport is small, 2000 is plenty
     const MAX_FEATURES = 10000;
     if (features.length > MAX_FEATURES) {
       features.sort((a, b) => {
         const [ax, ay] = a.geometry.coordinates[0][0];
         const [bx, by] = b.geometry.coordinates[0][0];
-        // interleave x/y to avoid column-ordering bias
+
         return ax + ay - (bx + by);
       });
-      // Stride-sample across the sorted list for even spread
+
       const step = Math.floor(features.length / MAX_FEATURES);
       features = features
         .filter((_, i) => i % step === 0)
@@ -460,6 +468,10 @@ const layer = [
   "phivolcs-liquefaction",
   "phivolcs-tsunami",
   "flood-mgb",
+  "landslide-noah",
+  "earthquake-induced-landslide-phivolcs",
+  "phivolcs-groundshaking",
+  "rain-induced-landslide-mgb",
 ];
 
 router.get("/exposure/critical-infra/summary", (req, res) => {
@@ -477,11 +489,12 @@ router.get("/exposure/critical-infra/summary", (req, res) => {
     const municipalitySummary = {};
     const exposedFacilityIds = new Set();
 
+    const facilityExposureMap = new Map();
+
     const getMunicipality = (properties) => properties?.municity ?? "Unknown";
 
     const normalizeSusceptibility = (raw) => {
       if (!raw) return "Unknown";
-
       return raw.toString().trim().replace(/\s+/g, " ");
     };
 
@@ -489,7 +502,11 @@ router.get("/exposure/critical-infra/summary", (req, res) => {
 
     for (const flood of layerFeatures) {
       const level = normalizeSusceptibility(
-        flood.properties?.susceptibility ?? flood.properties?.FloodSusc,
+        flood.properties?.susceptibility ??
+          flood.properties?.FloodSusc ??
+          flood.properties?.eil_susceptibility ??
+          flood.properties?.groundshaking_susc ??
+          flood.properties?.LndslideSu,
       );
       susceptibilityLevelsSet.add(level);
     }
@@ -516,23 +533,26 @@ router.get("/exposure/critical-infra/summary", (req, res) => {
       }
     }
 
-    for (const layer of layerFeatures) {
-      if (!layer.geometry) continue;
+    for (const floodPolygon of layerFeatures) {
+      if (!floodPolygon.geometry) continue;
 
       const susceptibility = normalizeSusceptibility(
-        layer.properties?.susceptibility ?? layer.properties?.FloodSusc,
+        floodPolygon.properties?.susceptibility ??
+          floodPolygon.properties?.FloodSusc ??
+          floodPolygon.properties?.eil_susceptibility ??
+          floodPolygon.properties?.groundshaking_susc ??
+          floodPolygon.properties?.LndslideSu,
       );
 
       for (const facility of criticalInfraFeatures) {
         if (!facility.geometry) continue;
 
         let intersects = false;
-
         try {
           intersects =
             facility.geometry.type === "Point"
-              ? turf.booleanPointInPolygon(facility, layer)
-              : turf.booleanIntersects(facility, layer);
+              ? turf.booleanPointInPolygon(facility, floodPolygon)
+              : turf.booleanIntersects(facility, floodPolygon);
         } catch (err) {
           console.warn("Intersection check failed:", err.message);
           continue;
@@ -541,12 +561,29 @@ router.get("/exposure/critical-infra/summary", (req, res) => {
         if (!intersects) continue;
 
         const id = facility.properties?.id ?? facility.properties?.name;
-
         const type = facility.properties?.type ?? "Unknown";
         const municipality = getMunicipality(facility.properties);
 
         exposedFacilityIds.add(id);
 
+        if (!facilityExposureMap.has(id)) {
+          facilityExposureMap.set(id, {
+            type,
+            municipality,
+            susceptibilitySet: new Set(),
+          });
+        }
+
+        facilityExposureMap.get(id).susceptibilitySet.add(susceptibility);
+      }
+    }
+
+    for (const {
+      type,
+      municipality,
+      susceptibilitySet,
+    } of facilityExposureMap.values()) {
+      for (const susceptibility of susceptibilitySet) {
         summary[type][susceptibility] =
           (summary[type][susceptibility] ?? 0) + 1;
 
@@ -573,7 +610,7 @@ router.get("/exposure/building-footprints/summary", (req, res) => {
   try {
     const { province, municity, barangay } = req.query;
 
-    let floodFeatures = drrmCache.get("flood-noah") || [];
+    let floodFeatures = drrmCache.get("flood-mgb") || [];
     let buildingFeatures = drrmCache.get("building-footprints") || [];
 
     const totalBuildings = buildingFeatures.length;
@@ -614,6 +651,9 @@ router.get("/exposure/building-footprints/summary", (req, res) => {
               f.properties?.susceptibility ??
               f.properties?.hazard ??
               f.properties?.FloodSusc ??
+              f.properties?.eil_susceptibility ??
+              f.properties?.groundshaking_susc ??
+              f.properties?.LndslideSu ??
               null,
           )
           .filter(Boolean),
@@ -634,7 +674,6 @@ router.get("/exposure/building-footprints/summary", (req, res) => {
 
     for (const building of buildingFeatures) {
       if (!building.geometry) continue;
-      // if (sampledBuildings >= SAMPLE_LIMIT) break;
 
       sampledBuildings++;
 
@@ -659,11 +698,15 @@ router.get("/exposure/building-footprints/summary", (req, res) => {
           intersected.feature.properties?.susceptibility ??
           intersected.feature.properties?.FloodSusc ??
           intersected.feature.properties?.hazard ??
+          intersected.feature.properties?.eil_susceptibility ??
+          intersected.feature.properties?.groundshaking_susc ??
+          intersected.feature.properties?.LndslideSu ??
           "Unknown";
 
         const municipality =
           building.properties?.municity ??
           intersected.feature.properties?.municity ??
+          intersected.feature.properties?.municipality ??
           "Unknown";
 
         exposedBuildings.push({ level, municipality });
